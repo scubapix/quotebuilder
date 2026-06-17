@@ -1,0 +1,104 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Customer {
+  id            String   @id @default(cuid())
+  bigCommerceId Int?    @unique
+  firstName     String
+  lastName      String
+  email         String
+  phone         String   @default("")
+  street1       String   @default("")
+  city          String   @default("")
+  region        String   @default("")
+  postcode      String   @default("")
+  country       String   @default("Australia")
+  countryIso2   String   @default("AU")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  quotes        Quote[]
+
+  @@index([email])
+  @@index([firstName, lastName])
+}
+
+model Quote {
+  id          String     @id @default(cuid())
+  name        String
+  // Validated in app code: draft | sent | accepted | ordered.
+  status      String     @default("draft")
+  customerId  String?
+  customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  quoteNo     String?
+  checkoutUrl String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  items       LineItem[]
+  tradeins    TradeIn[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([updatedAt])
+}
+
+model LineItem {
+  id         String  @id @default(cuid())
+  quoteId    String
+  quote      Quote   @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  productId  Int
+  variantId  Int?
+  sku        String
+  name       String
+  priceCents Int
+  qty        Int
+
+  @@index([quoteId])
+  @@index([sku])
+}
+
+model TradeIn {
+  id          String @id @default(cuid())
+  quoteId     String
+  quote       Quote  @relation(fields: [quoteId], references: [id], onDelete: Cascade)
+  label       String
+  amountCents Int
+
+  @@index([quoteId])
+}
+
+model Settings {
+  id         Int      @id @default(1)
+  storeHash  String?
+  channelId  String   @default("1")
+  smtpHost   String?
+  smtpPort   Int?
+  smtpFrom   String?
+  smtpUser   String?
+  connected  Boolean  @default(false)
+  dryRun     Boolean  @default(true)
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+}
+
+// Seeded from the prototype's DEMO_CATALOG. Each row is independently selectable;
+// variant SKUs intentionally remain separate rows sharing the parent product id.
+model CatalogItem {
+  sku        String   @id
+  productId  Int
+  variantId  Int?
+  name       String
+  priceCents Int
+  category   String
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([productId])
+  @@index([variantId])
+  @@index([category])
+}
