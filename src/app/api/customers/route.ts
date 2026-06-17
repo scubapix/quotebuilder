@@ -1,6 +1,11 @@
 import type { Customer } from "@/types";
 import { getAppMode } from "@/lib/app-mode";
-import { customerToBigCommerce, saveBigCommerceCustomer } from "@/lib/bigcommerce";
+import {
+  BigCommerceError,
+  createBigCommerceCustomer,
+  customerToBigCommerce,
+  findBigCommerceCustomerByEmail,
+} from "@/lib/bigcommerce";
 import { toCustomer } from "@/lib/db-mappers";
 import { prisma } from "@/lib/prisma";
 
@@ -16,46 +21,85 @@ export async function POST(request: Request) {
     }
 
     const mode = getAppMode();
+    const customer = normaliseCustomerForSave(payload.customer);
 
     if (mode === "demo") {
       try {
-        const customer = await saveDemoCustomer(payload.customer);
-        return Response.json({ customer, mode });
+        const saved = await saveDemoCustomer(customer);
+        return Response.json({ customer: saved, mode });
       } catch {
         // Keep demo usable when no local database is configured.
       }
       return Response.json({
         customer: {
-          ...payload.customer,
-          id: payload.customer.id ?? `demo-${Date.now()}`,
+          ...customer,
+          id: customer.id ?? `demo-${Date.now()}`,
         },
         mode,
       });
     }
 
-    if (mode === "dry_run") {
-      console.info("BigCommerce dry-run customer save", {
+    const existing = await findBigCommerceCustomerByEmail(customer.email);
+    if (existing) {
+      console.info("BigCommerce customer linked by email", {
         mode,
-        payload: customerToBigCommerce(payload.customer),
+        customer_id: existing.id,
+        email: existing.email,
+        wroteToBigCommerce: false,
+      });
+      return Response.json({ customer: existing, mode, linkedExisting: true });
+    }
+
+    if (mode === "dry_run") {
+      console.info("BigCommerce dry-run customer create", {
+        mode,
+        payload: customerToBigCommerce(customer),
+        wroteToBigCommerce: false,
       });
       return Response.json({
         customer: {
-          ...payload.customer,
-          id: typeof payload.customer.id === "number" ? payload.customer.id : `dry-run-${Date.now()}`,
+          ...customer,
+          id: `dry-run-${Date.now()}`,
         },
         mode,
         dryRun: true,
       });
     }
 
-    const customer = await saveBigCommerceCustomer(payload.customer);
-    return Response.json({ customer, mode });
+    const created = await createBigCommerceCustomer(customer);
+    return Response.json({ customer: created, mode, created: true });
   } catch (error) {
+    if (error instanceof BigCommerceError && error.status === 422) {
+      console.error("BigCommerce customer 422 response", {
+        status: error.status,
+        payload: error.payload,
+      });
+    }
     return Response.json(
       { error: error instanceof Error ? error.message : "Could not save customer." },
       { status: 400 },
     );
   }
+}
+
+function normaliseCustomerForSave(customer: Customer): Customer {
+  const firstName = customer.firstName.trim();
+  const email = customer.email.trim();
+  if (!firstName || !email) throw new Error("First name and email are required.");
+
+  return {
+    ...customer,
+    firstName,
+    lastName: customer.lastName.trim() || "Customer",
+    email,
+    phone: customer.phone.trim(),
+    street1: customer.street1.trim(),
+    city: customer.city.trim(),
+    region: customer.region.trim(),
+    postcode: customer.postcode.trim(),
+    country: customer.country.trim() || "Australia",
+    countryIso2: customer.countryIso2.trim() || "AU",
+  };
 }
 
 async function saveDemoCustomer(customer: Customer) {

@@ -166,6 +166,65 @@ export async function loadQuote(id: string) {
   return toQuoteResponse(quote);
 }
 
+export async function updateQuoteStatus(id: string, status: QuoteStatus) {
+  if (!isValidStatus(status)) throw new Error("Invalid quote status.");
+  const quote = await prisma.quote
+    .update({
+      where: { id },
+      data: { status },
+      include: { customer: true, items: { orderBy: { id: "asc" } }, tradeins: { orderBy: { id: "asc" } } },
+    })
+    .catch(() => null);
+  if (!quote) throw new Error("Quote not found.");
+  return toQuoteResponse(quote);
+}
+
+export async function deleteQuote(id: string) {
+  const existing = await prisma.quote.findUnique({
+    where: { id },
+    select: { id: true },
+  });
+  if (!existing) throw new Error("Quote not found.");
+
+  const result = await deleteQuoteWithCascade(id).catch(() => deleteQuoteWithExplicitChildren(id));
+
+  if (!result.cascadeVerified) {
+    throw new Error("Quote deleted, but related line items or trade-ins could not be removed.");
+  }
+
+  return result;
+}
+
+async function deleteQuoteWithCascade(id: string) {
+  return prisma.$transaction(async (tx) => {
+    await tx.quote.delete({ where: { id } });
+    return verifyDeletedQuoteChildren(tx, id);
+  });
+}
+
+async function deleteQuoteWithExplicitChildren(id: string) {
+  return prisma.$transaction(async (tx) => {
+    await tx.lineItem.deleteMany({ where: { quoteId: id } });
+    await tx.tradeIn.deleteMany({ where: { quoteId: id } });
+    await tx.quote.delete({ where: { id } });
+    return verifyDeletedQuoteChildren(tx, id);
+  });
+}
+
+async function verifyDeletedQuoteChildren(tx: Parameters<Parameters<typeof prisma.$transaction>[0]>[0], id: string) {
+  const [remainingLineItems, remainingTradeIns] = await Promise.all([
+    tx.lineItem.count({ where: { quoteId: id } }),
+    tx.tradeIn.count({ where: { quoteId: id } }),
+  ]);
+
+  return {
+    deletedQuoteId: id,
+    cascadeVerified: remainingLineItems === 0 && remainingTradeIns === 0,
+    remainingLineItems,
+    remainingTradeIns,
+  };
+}
+
 export async function listDashboardQuotes(): Promise<DashboardQuoteRow[]> {
   const quotes = await prisma.quote.findMany({
     include: {

@@ -109,7 +109,6 @@ function quoteEmailHtml({ ctaUrl }: { systemName: string; quoteNumber: string; c
       <p>Thanks for your interest in building your underwater imaging system with Scubapix. Your quote is attached as a PDF &mdash; it lists each item, the configuration we discussed, and the total including GST.</p>
       <p>When you're ready to go ahead, just click the button below. It'll load this exact system into your cart so you can review everything and complete your order online &mdash; no need to re-add the items yourself.</p>
       <p style="margin:24px 0">
-        <!-- TODO: Replace this placeholder CTA with POST /api/quotes/:id/checkout -> BigCommerce cart + checkout URL, honouring quoted prices, at the checkout checkpoint. -->
         <a href="${escapeAttribute(ctaUrl)}" style="display:inline-block;background:#0E7C7B;color:#ffffff;text-decoration:none;font-weight:700;border-radius:7px;padding:12px 18px">
           Add this system to cart
         </a>

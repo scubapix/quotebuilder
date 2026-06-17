@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { AppHeader } from "@/components/layout/AppHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { money, uid } from "@/lib/format";
-import type { AppMode, CatalogItem, Customer, DashboardQuoteRow, LineItem, Quote } from "@/types";
+import type { AppMode, CatalogItem, Customer, DashboardQuoteRow, LineItem, Quote, QuoteStatus } from "@/types";
 import { totals } from "@/types";
 
 const NEW_CUSTOMER: Customer = {
@@ -94,6 +94,7 @@ export function BuilderPage() {
   const [dashboardSearch, setDashboardSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [emailing, setEmailing] = useState(false);
+  const [quoteActionId, setQuoteActionId] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ kind: "ok" | "err"; message: string } | null>(null);
   const [nowMs] = useState(() => Date.now());
 
@@ -296,7 +297,12 @@ export function BuilderPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ customer: form }),
       });
-      const data = (await response.json()) as { customer?: Customer; dryRun?: boolean; error?: string };
+      const data = (await response.json()) as {
+        customer?: Customer;
+        dryRun?: boolean;
+        linkedExisting?: boolean;
+        error?: string;
+      };
       if (!response.ok || !data.customer) throw new Error(data.error || "Could not save customer.");
 
       const savedCustomer = normaliseCustomer(data.customer);
@@ -306,7 +312,11 @@ export function BuilderPage() {
       updateActiveQuote((quote) => ({ ...quote, saved: false }));
       setBanner({
         kind: "ok",
-        message: data.dryRun ? "Dry run: customer linked, no BigCommerce write made." : "Customer saved and linked.",
+        message: data.linkedExisting
+          ? "Existing BigCommerce customer linked; no customer write made."
+          : data.dryRun
+            ? "Dry run: customer create logged, no BigCommerce write made."
+            : "Customer created and linked.",
       });
     } catch (error) {
       setBanner({
@@ -480,6 +490,78 @@ export function BuilderPage() {
     if (data.customer) setCustomer(data.customer);
     setActiveId(data.quote.id);
     setActiveView("builder");
+  }
+
+  async function updateDashboardQuoteStatus(quoteId: string, status: QuoteStatus) {
+    setQuoteActionId(quoteId);
+    setBanner(null);
+    try {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(quoteId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status }),
+      });
+      const data = (await response.json()) as { quote?: Quote; error?: string };
+      if (!response.ok || !data.quote) throw new Error(data.error || "Could not update quote.");
+
+      setQuotes((current) =>
+        current.map((quote) => (quote.id === quoteId ? { ...quote, status: data.quote!.status } : quote)),
+      );
+      await refreshDashboard();
+      setDashboardFilter(status === "ordered" ? "ordered" : "open");
+      setBanner({
+        kind: "ok",
+        message: status === "ordered" ? "Quote marked completed." : "Quote reopened as draft.",
+      });
+    } catch (error) {
+      setBanner({
+        kind: "err",
+        message: error instanceof Error ? error.message : "Could not update quote.",
+      });
+    } finally {
+      setQuoteActionId(null);
+    }
+  }
+
+  async function deleteDashboardQuote(row: DashboardQuoteRow) {
+    const confirmed = window.confirm(
+      `Permanently delete '${row.name}' for ${row.customerName || "this customer"}? This cannot be undone.`,
+    );
+    if (!confirmed) return;
+
+    setQuoteActionId(row.quoteId);
+    setBanner(null);
+    try {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(row.quoteId)}`, {
+        method: "DELETE",
+      });
+      const data = (await response.json()) as {
+        error?: string;
+        remainingLineItems?: number;
+        remainingTradeIns?: number;
+      };
+      if (!response.ok) throw new Error(data.error || "Could not delete quote.");
+
+      setDashboardRows((current) => current.filter((quote) => quote.quoteId !== row.quoteId));
+      setQuotes((current) => current.filter((quote) => quote.id !== row.quoteId));
+      if (activeId === row.quoteId) {
+        const nextQuote = quotes.find((quote) => quote.id !== row.quoteId);
+        setActiveId(nextQuote?.id ?? "");
+      }
+      setBanner({
+        kind: "ok",
+        message: `Quote deleted. Verified ${data.remainingLineItems ?? 0} line items and ${
+          data.remainingTradeIns ?? 0
+        } trade-ins remain for that quote.`,
+      });
+    } catch (error) {
+      setBanner({
+        kind: "err",
+        message: error instanceof Error ? error.message : "Could not delete quote.",
+      });
+    } finally {
+      setQuoteActionId(null);
+    }
   }
 
   function openQuotesView() {
@@ -858,7 +940,9 @@ export function BuilderPage() {
       ) : (
         <div className="mx-auto max-w-[1000px] px-[22px] pb-20 pt-6">
           <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
-            <h2 className="m-0 font-display text-[22px] font-semibold text-ink">Open quotes</h2>
+            <h2 className="m-0 font-display text-[22px] font-semibold text-ink">
+              {dashboardFilter === "open" ? "Open quotes" : "Completed quotes"}
+            </h2>
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -870,6 +954,11 @@ export function BuilderPage() {
                 }`}
               >
                 Open
+                {openQuoteCount > 0 && (
+                  <span className="ml-1.5 rounded-full bg-teal px-1.5 py-px font-mono text-[10px] text-[#04201f]">
+                    {openQuoteCount}
+                  </span>
+                )}
               </button>
               <button
                 type="button"
@@ -880,7 +969,7 @@ export function BuilderPage() {
                     : "border-line bg-card text-ink-2"
                 }`}
               >
-                Ordered
+                Completed
               </button>
               <input
                 value={dashboardSearch}
@@ -891,22 +980,34 @@ export function BuilderPage() {
             </div>
           </div>
 
+          {banner && (
+            <div
+              className={`mb-4 flex gap-2.5 rounded-[var(--radius-sm)] border px-3.5 py-[11px] text-[13px] ${
+                banner.kind === "ok"
+                  ? "border-[#BFE0CC] bg-[#ECF6F0] text-[#1E5E3D]"
+                  : "border-[#ECC4C9] bg-[#FBEDEE] text-[#8C2733]"
+              }`}
+            >
+              <span className="font-mono font-semibold">{banner.kind === "ok" ? "✓" : "!"}</span>
+              <span>{banner.message}</span>
+            </div>
+          )}
+
           <div className="overflow-hidden rounded-[var(--radius)] border border-line bg-card shadow-card">
-            <div className="grid grid-cols-[1.4fr_1.6fr_0.9fr_0.9fr_0.8fr] gap-2.5 border-b border-[#F0F3F5] bg-[#F8FAFB] px-4 py-[13px] text-[10.5px] font-semibold uppercase tracking-[0.5px] text-muted">
+            <div className="grid grid-cols-[1.3fr_1.5fr_0.8fr_0.8fr_0.7fr_1.2fr] gap-2.5 border-b border-[#F0F3F5] bg-[#F8FAFB] px-4 py-[13px] text-[10.5px] font-semibold uppercase tracking-[0.5px] text-muted">
               <span>Customer</span>
               <span>System</span>
               <span className="text-right">Total</span>
               <span className="text-right">Status</span>
               <span className="text-right">Updated</span>
+              <span className="text-right">Actions</span>
             </div>
 
             {filteredDashboardRows.length ? (
               filteredDashboardRows.map((row) => (
-                <button
+                <div
                   key={row.quoteId}
-                  type="button"
-                  onClick={() => openDashboardQuote(row.quoteId)}
-                  className="grid w-full cursor-pointer grid-cols-[1.4fr_1.6fr_0.9fr_0.9fr_0.8fr] items-center gap-2.5 border-b border-[#F0F3F5] px-4 py-[13px] text-left last:border-b-0 hover:bg-teal-bg"
+                  className="grid w-full grid-cols-[1.3fr_1.5fr_0.8fr_0.8fr_0.7fr_1.2fr] items-center gap-2.5 border-b border-[#F0F3F5] px-4 py-[13px] text-left last:border-b-0 hover:bg-teal-bg"
                 >
                   <span className="font-medium text-ink-text">{row.customerName || "—"}</span>
                   <span className="text-[13px] text-muted">{row.name}</span>
@@ -915,7 +1016,43 @@ export function BuilderPage() {
                     <StatusPill status={row.status} />
                   </span>
                   <span className="text-right text-xs text-muted">{formatWhen(row.updatedAt)}</span>
-                </button>
+                  <span className="flex flex-wrap justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => openDashboardQuote(row.quoteId)}
+                      className="rounded-md border border-line bg-card px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-ink-2 hover:border-teal hover:text-teal-dk"
+                    >
+                      Open
+                    </button>
+                    {row.status === "ordered" ? (
+                      <button
+                        type="button"
+                        onClick={() => updateDashboardQuoteStatus(row.quoteId, "draft")}
+                        disabled={quoteActionId === row.quoteId}
+                        className="rounded-md border border-line bg-card px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-ink-2 hover:border-teal hover:text-teal-dk disabled:opacity-45"
+                      >
+                        Reopen
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => updateDashboardQuoteStatus(row.quoteId, "ordered")}
+                        disabled={quoteActionId === row.quoteId}
+                        className="rounded-md border border-line bg-card px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-ink-2 hover:border-teal hover:text-teal-dk disabled:opacity-45"
+                      >
+                        Mark completed
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => deleteDashboardQuote(row)}
+                      disabled={quoteActionId === row.quoteId}
+                      className="rounded-md border border-[#ECC4C9] bg-[#FBEDEE] px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-red hover:bg-[#F6DADF] disabled:opacity-45"
+                    >
+                      Delete
+                    </button>
+                  </span>
+                </div>
               ))
             ) : (
               <div className="px-4 py-10 text-center text-muted">

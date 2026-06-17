@@ -1,5 +1,11 @@
 import type { CatalogItem, Customer } from "@/types";
 
+export interface BigCommerceCartLineItem {
+  productId: number;
+  variantId: number | null;
+  quantity: number;
+}
+
 type BigCommerceVariant = {
   id: number;
   sku?: string;
@@ -24,6 +30,7 @@ type BigCommerceCategory = {
 };
 
 type BigCommerceAddress = {
+  address1?: string;
   street_1?: string;
   city?: string;
   state_or_province?: string;
@@ -52,7 +59,34 @@ type BigCommerceListResponse<T> = {
   };
 };
 
-export class BigCommerceError extends Error {}
+type BigCommerceErrorPayload = {
+  title?: string;
+  detail?: string;
+  message?: string;
+  errors?: unknown;
+};
+
+type BigCommerceCartResponse = {
+  data?: {
+    id?: string;
+  };
+};
+
+type BigCommerceRedirectUrlsResponse = {
+  data?: {
+    checkout_url?: string;
+  };
+};
+
+export class BigCommerceError extends Error {
+  constructor(
+    message: string,
+    public readonly status?: number,
+    public readonly payload?: unknown,
+  ) {
+    super(message);
+  }
+}
 
 function getConfig() {
   const storeHash = process.env.BIGCOMMERCE_STORE_HASH;
@@ -84,10 +118,42 @@ async function requestBigCommerce<T>(path: string, init?: RequestInit, attempt =
   }
 
   if (!response.ok) {
-    throw new BigCommerceError(`BigCommerce request failed with status ${response.status}`);
+    const payload = await readBigCommerceError(response);
+    const message = bigCommerceErrorMessage(response.status, payload);
+    throw new BigCommerceError(message, response.status, payload);
   }
 
   return (await response.json()) as T;
+}
+
+export async function createBigCommerceCheckout(input: {
+  lineItems: BigCommerceCartLineItem[];
+  customerId: number | null;
+}) {
+  const cartLineItems = input.lineItems.map((item) => ({
+    product_id: item.productId,
+    ...(item.variantId !== null ? { variant_id: item.variantId } : {}),
+    quantity: item.quantity,
+  }));
+  const cart = await requestBigCommerce<BigCommerceCartResponse>("/v3/carts", {
+    method: "POST",
+    body: JSON.stringify({
+      line_items: cartLineItems,
+      ...(input.customerId ? { customer_id: input.customerId } : {}),
+    }),
+  });
+
+  const cartId = cart.data?.id;
+  if (!cartId) throw new BigCommerceError("BigCommerce cart creation returned no cart id.");
+
+  const redirectUrls = await requestBigCommerce<BigCommerceRedirectUrlsResponse>(
+    `/v3/carts/${encodeURIComponent(cartId)}/redirect_urls`,
+    { method: "POST" },
+  );
+  const checkoutUrl = redirectUrls.data?.checkout_url;
+  if (!checkoutUrl) throw new BigCommerceError("BigCommerce cart creation returned no checkout URL.");
+
+  return { cartId, checkoutUrl };
 }
 
 export async function fetchAllBigCommerceProducts(): Promise<{
@@ -173,38 +239,52 @@ export async function searchBigCommerceCustomers(query: string): Promise<Custome
   return (json.data ?? []).map(customerFromBigCommerce).slice(0, 6);
 }
 
-export async function saveBigCommerceCustomer(customer: Customer): Promise<Customer> {
+export async function findBigCommerceCustomerByEmail(email: string): Promise<Customer | null> {
+  const matches = await searchBigCommerceCustomers(email);
+  const normalised = email.trim().toLowerCase();
+  return matches.find((customer) => customer.email.trim().toLowerCase() === normalised) ?? null;
+}
+
+export async function createBigCommerceCustomer(customer: Customer): Promise<Customer> {
   const payload = customerToBigCommerce(customer);
-  const id = typeof customer.id === "number" ? customer.id : null;
-  const method = id ? "PUT" : "POST";
-  const body = JSON.stringify([id ? { ...payload, id } : payload]);
   const json = await requestBigCommerce<BigCommerceListResponse<BigCommerceCustomer>>("/v3/customers", {
-    method,
-    body,
+    method: "POST",
+    body: JSON.stringify([payload]),
   });
 
   const saved = json.data?.[0];
-  if (!saved) throw new BigCommerceError("BigCommerce customer save returned no customer.");
+  if (!saved) throw new BigCommerceError("BigCommerce customer create returned no customer.");
   return customerFromBigCommerce(saved);
 }
 
 export function customerToBigCommerce(customer: Customer) {
+  const base = {
+    first_name: customer.firstName.trim(),
+    last_name: customer.lastName.trim() || "Customer",
+    email: customer.email.trim(),
+    phone: customer.phone.trim() || undefined,
+  };
+  const address = customerAddressToBigCommerce(customer);
+  if (!address) return base;
+
   return {
-    first_name: customer.firstName,
-    last_name: customer.lastName,
-    email: customer.email,
-    phone: customer.phone || undefined,
-    addresses: [
-      {
-        first_name: customer.firstName,
-        last_name: customer.lastName,
-        street_1: customer.street1 || "",
-        city: customer.city || "",
-        state_or_province: customer.region || "",
-        postal_code: customer.postcode || "",
-        country_code: customer.countryIso2 || "AU",
-      },
-    ],
+    ...base,
+    addresses: [address],
+  };
+}
+
+function customerAddressToBigCommerce(customer: Customer) {
+  const address1 = customer.street1.trim();
+  if (!address1) return null;
+
+  return {
+    first_name: customer.firstName.trim(),
+    last_name: customer.lastName.trim() || "Customer",
+    address1,
+    city: customer.city.trim() || "Unknown",
+    state_or_province: customer.region.trim() || undefined,
+    postal_code: customer.postcode.trim() || undefined,
+    country_code: customer.countryIso2.trim() || "AU",
   };
 }
 
@@ -288,7 +368,7 @@ function customerFromBigCommerce(customer: BigCommerceCustomer): Customer {
     lastName: customer.last_name ?? "",
     email: customer.email ?? "",
     phone: customer.phone ?? "",
-    street1: address?.street_1 ?? "",
+    street1: address?.street_1 ?? address?.address1 ?? "",
     city: address?.city ?? "",
     region: address?.state_or_province ?? "",
     postcode: address?.postal_code ?? "",
@@ -299,6 +379,28 @@ function customerFromBigCommerce(customer: BigCommerceCustomer): Customer {
 
 function dollarsToCents(value: number | string | null | undefined) {
   return Math.round((Number(value) || 0) * 100);
+}
+
+async function readBigCommerceError(response: Response) {
+  const text = await response.text().catch(() => "");
+  if (!text) return null;
+  try {
+    return JSON.parse(text) as BigCommerceErrorPayload;
+  } catch {
+    return { message: text };
+  }
+}
+
+function bigCommerceErrorMessage(status: number, payload: unknown) {
+  const text = JSON.stringify(payload ?? "").toLowerCase();
+  if (
+    [400, 404, 409, 422].includes(status) &&
+    /(stock|inventory|unavailable|not available|not purchasable|variant|product)/i.test(text)
+  ) {
+    return "One or more quoted products are unavailable or out of stock in BigCommerce.";
+  }
+
+  return `BigCommerce request failed with status ${status}`;
 }
 
 function retryDelayMs(response: Response) {

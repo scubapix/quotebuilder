@@ -7,12 +7,19 @@ const STYLES: Record<QuoteStatus, string> = {
   ordered: "bg-[#E7F4EC] text-[#1E6B43]",
 };
 
+const LABELS: Record<QuoteStatus, string> = {
+  draft: "draft",
+  sent: "sent",
+  accepted: "accepted",
+  ordered: "completed",
+};
+
 export function StatusPill({ status }: { status: QuoteStatus }) {
   return (
     <span
       className={`rounded-full px-[7px] py-0.5 font-mono text-[10px] uppercase tracking-[0.3px] ${STYLES[status]}`}
     >
-      {status}
+      {LABELS[status]}
     </span>
   );
 }
