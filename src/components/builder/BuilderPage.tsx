@@ -1099,13 +1099,6 @@ export function BuilderPage() {
               >
                 {emailing ? "Emailing..." : "Email to customer"}
               </button>
-              <button
-                type="button"
-                disabled
-                className="flex items-center gap-2 rounded-[var(--radius-sm)] bg-teal px-[18px] py-[11px] font-display text-[13.5px] font-semibold text-white opacity-45"
-              >
-                Accept → order
-              </button>
             </div>
 
             <p className="mt-4 text-[11.5px] leading-relaxed text-muted">
