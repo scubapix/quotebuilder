@@ -22,10 +22,10 @@ const FONT_MONO = "Roboto-Mono";
 const FONT_MONO_BOLD = "Roboto-Mono-Bold";
 
 const FONT_PATHS = {
-  regular: fontPath("@expo-google-fonts", "roboto", "400Regular", "Roboto_400Regular.ttf"),
-  bold: fontPath("@expo-google-fonts", "roboto", "700Bold", "Roboto_700Bold.ttf"),
-  mono: fontPath("@expo-google-fonts", "roboto-mono", "400Regular", "RobotoMono_400Regular.ttf"),
-  monoBold: fontPath("@expo-google-fonts", "roboto-mono", "700Bold", "RobotoMono_700Bold.ttf"),
+  regular: fontPath("Roboto_400Regular.ttf"),
+  bold: fontPath("Roboto_700Bold.ttf"),
+  mono: fontPath("RobotoMono_400Regular.ttf"),
+  monoBold: fontPath("RobotoMono_700Bold.ttf"),
 };
 
 export async function renderQuotePdf(input: QuotePdfInput): Promise<Buffer> {
@@ -202,7 +202,7 @@ function registerQuoteFonts(doc: PDFKit.PDFDocument) {
 }
 
 function fontPath(...segments: string[]) {
-  return path.join(process.cwd(), "node_modules", ...segments);
+  return path.join(process.cwd(), "src", "assets", "fonts", "quote-pdf", ...segments);
 }
 
 function customerName(customer: Customer | null) {

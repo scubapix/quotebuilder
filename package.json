@@ -17,8 +17,6 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@expo-google-fonts/roboto": "^0.4.3",
-    "@expo-google-fonts/roboto-mono": "^0.4.2",
     "@prisma/adapter-better-sqlite3": "^7.8.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",

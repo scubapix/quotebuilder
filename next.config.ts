@@ -3,12 +3,10 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   outputFileTracingIncludes: {
     "/api/quotes/[id]/pdf": [
-      "./node_modules/@expo-google-fonts/roboto/**/*.ttf",
-      "./node_modules/@expo-google-fonts/roboto-mono/**/*.ttf",
+      "./src/assets/fonts/quote-pdf/**/*.ttf",
     ],
     "/api/quotes/[id]/email": [
-      "./node_modules/@expo-google-fonts/roboto/**/*.ttf",
-      "./node_modules/@expo-google-fonts/roboto-mono/**/*.ttf",
+      "./src/assets/fonts/quote-pdf/**/*.ttf",
     ],
   },
 };
