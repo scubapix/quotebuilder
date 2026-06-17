@@ -4,7 +4,17 @@ import { useEffect, useMemo, useState } from "react";
 import { AppHeader } from "@/components/layout/AppHeader";
 import { StatusPill } from "@/components/ui/StatusPill";
 import { money, uid } from "@/lib/format";
-import type { AppMode, CatalogItem, Customer, DashboardQuoteRow, LineItem, Quote, QuoteStatus } from "@/types";
+import type {
+  AppMode,
+  CatalogItem,
+  Customer,
+  DashboardQuoteRow,
+  LineItem,
+  Quote,
+  QuoteStatus,
+  TemplatePriceNote,
+  TemplateQuoteRow,
+} from "@/types";
 import { totals } from "@/types";
 
 const NEW_CUSTOMER: Customer = {
@@ -56,6 +66,7 @@ function newQuote(name = "System 1"): Quote {
     items: [],
     tradeins: [],
     checkout: null,
+    isTemplate: false,
     saved: false,
     persisted: false,
   };
@@ -71,7 +82,7 @@ function SearchIcon() {
 }
 
 export function BuilderPage() {
-  const [activeView, setActiveView] = useState<"builder" | "quotes">("builder");
+  const [activeView, setActiveView] = useState<"builder" | "quotes" | "templates">("builder");
   const [mode, setMode] = useState<AppMode>("demo");
   const [customer, setCustomer] = useState<Customer>(NEW_CUSTOMER);
   const [quotes, setQuotes] = useState<Quote[]>(() => [newQuote()]);
@@ -90,11 +101,14 @@ export function BuilderPage() {
   const [customerSaving, setCustomerSaving] = useState(false);
   const [linkedCustomerId, setLinkedCustomerId] = useState<string | number | null>(null);
   const [dashboardRows, setDashboardRows] = useState<DashboardQuoteRow[]>([]);
+  const [templateRows, setTemplateRows] = useState<TemplateQuoteRow[]>([]);
   const [dashboardFilter, setDashboardFilter] = useState<"open" | "ordered">("open");
   const [dashboardSearch, setDashboardSearch] = useState("");
+  const [templateSearch, setTemplateSearch] = useState("");
   const [saving, setSaving] = useState(false);
   const [emailing, setEmailing] = useState(false);
   const [quoteActionId, setQuoteActionId] = useState<string | null>(null);
+  const [templateActionId, setTemplateActionId] = useState<string | null>(null);
   const [banner, setBanner] = useState<{ kind: "ok" | "err"; message: string } | null>(null);
   const [nowMs] = useState(() => Date.now());
 
@@ -191,6 +205,14 @@ export function BuilderPage() {
       const q = dashboardSearch.toLowerCase();
       if (!q) return true;
       return `${row.customerName} ${row.name} ${row.customerEmail}`.toLowerCase().includes(q);
+    });
+  const filteredTemplateRows = templateRows
+    .slice()
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+    .filter((row) => {
+      const q = templateSearch.toLowerCase();
+      if (!q) return true;
+      return row.name.toLowerCase().includes(q);
     });
 
   function updateActiveQuote(updater: (quote: Quote) => Quote) {
@@ -391,6 +413,12 @@ export function BuilderPage() {
     setDashboardRows(data.quotes ?? []);
   }
 
+  async function refreshTemplates() {
+    const response = await fetch("/api/templates", { cache: "no-store" });
+    const data = (await response.json()) as { templates?: TemplateQuoteRow[] };
+    setTemplateRows(data.templates ?? []);
+  }
+
   async function saveActiveQuote() {
     if (!activeQuote || !activeQuote.items.length) return;
 
@@ -423,6 +451,41 @@ export function BuilderPage() {
       setBanner({
         kind: "err",
         message: error instanceof Error ? error.message : "Could not save quote.",
+      });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveActiveQuoteAsTemplate() {
+    if (!activeQuote || !activeQuote.items.length) {
+      setBanner({ kind: "err", message: "Add at least one item before saving a template." });
+      return;
+    }
+
+    const name = window.prompt("Template name", activeQuote.name || "Sony A7V Macro Build")?.trim();
+    if (!name) {
+      setBanner({ kind: "err", message: "Template name is required." });
+      return;
+    }
+
+    setSaving(true);
+    setBanner(null);
+    try {
+      const response = await fetch("/api/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, quote: activeQuote }),
+      });
+      const data = (await response.json()) as { quote?: Quote; error?: string };
+      if (!response.ok || !data.quote) throw new Error(data.error || "Could not save template.");
+
+      await refreshTemplates();
+      setBanner({ kind: "ok", message: `Template "${data.quote.name}" saved.` });
+    } catch (error) {
+      setBanner({
+        kind: "err",
+        message: error instanceof Error ? error.message : "Could not save template.",
       });
     } finally {
       setSaving(false);
@@ -523,6 +586,32 @@ export function BuilderPage() {
     }
   }
 
+  async function duplicateDashboardQuote(row: DashboardQuoteRow) {
+    setQuoteActionId(row.quoteId);
+    setBanner(null);
+    try {
+      const response = await fetch(`/api/quotes/${encodeURIComponent(row.quoteId)}/duplicate`, {
+        method: "POST",
+      });
+      const data = (await response.json()) as { quote?: Quote; customer?: Customer | null; error?: string };
+      if (!response.ok || !data.quote) throw new Error(data.error || "Could not duplicate quote.");
+
+      setQuotes((current) => [...current.filter((quote) => quote.id !== data.quote!.id), data.quote!]);
+      if (data.customer) setCustomer(data.customer);
+      setActiveId(data.quote.id);
+      await refreshDashboard();
+      setActiveView("builder");
+      setBanner({ kind: "ok", message: "Quote duplicated as a new draft." });
+    } catch (error) {
+      setBanner({
+        kind: "err",
+        message: error instanceof Error ? error.message : "Could not duplicate quote.",
+      });
+    } finally {
+      setQuoteActionId(null);
+    }
+  }
+
   async function deleteDashboardQuote(row: DashboardQuoteRow) {
     const confirmed = window.confirm(
       `Permanently delete '${row.name}' for ${row.customerName || "this customer"}? This cannot be undone.`,
@@ -564,9 +653,82 @@ export function BuilderPage() {
     }
   }
 
+  async function renameTemplate(row: TemplateQuoteRow) {
+    const name = window.prompt("Template name", row.name)?.trim();
+    if (!name) {
+      setBanner({ kind: "err", message: "Template name is required." });
+      return;
+    }
+
+    setTemplateActionId(row.quoteId);
+    setBanner(null);
+    try {
+      const response = await fetch(`/api/templates/${encodeURIComponent(row.quoteId)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const data = (await response.json()) as { quote?: Quote; error?: string };
+      if (!response.ok || !data.quote) throw new Error(data.error || "Could not rename template.");
+
+      setTemplateRows((current) =>
+        current.map((template) => (template.quoteId === row.quoteId ? { ...template, name: data.quote!.name } : template)),
+      );
+      setBanner({ kind: "ok", message: "Template renamed." });
+    } catch (error) {
+      setBanner({
+        kind: "err",
+        message: error instanceof Error ? error.message : "Could not rename template.",
+      });
+    } finally {
+      setTemplateActionId(null);
+    }
+  }
+
+  async function createDraftFromTemplate(row: TemplateQuoteRow) {
+    setTemplateActionId(row.quoteId);
+    setBanner(null);
+    try {
+      const response = await fetch(`/api/templates/${encodeURIComponent(row.quoteId)}/use`, {
+        method: "POST",
+      });
+      const data = (await response.json()) as {
+        quote?: Quote;
+        priceNotes?: TemplatePriceNote[];
+        error?: string;
+      };
+      if (!response.ok || !data.quote) throw new Error(data.error || "Could not use template.");
+
+      setQuotes((current) => [...current.filter((quote) => quote.id !== data.quote!.id), data.quote!]);
+      setCustomer(NEW_CUSTOMER);
+      setLinkedCustomerId(null);
+      setActiveId(data.quote.id);
+      await refreshDashboard();
+      setActiveView("builder");
+      setBanner({
+        kind: data.priceNotes?.length ? "err" : "ok",
+        message: data.priceNotes?.length
+          ? `Template opened with ${data.priceNotes.length} stored-price fallback note(s).`
+          : "Template opened as a new draft with current live prices.",
+      });
+    } catch (error) {
+      setBanner({
+        kind: "err",
+        message: error instanceof Error ? error.message : "Could not use template.",
+      });
+    } finally {
+      setTemplateActionId(null);
+    }
+  }
+
   function openQuotesView() {
     setActiveView("quotes");
     void refreshDashboard();
+  }
+
+  function openTemplatesView() {
+    setActiveView("templates");
+    void refreshTemplates();
   }
 
   function formatWhen(timestamp: number) {
@@ -585,6 +747,7 @@ export function BuilderPage() {
         openQuoteCount={openQuoteCount}
         onNavBuilder={() => setActiveView("builder")}
         onNavQuotes={openQuotesView}
+        onNavTemplates={openTemplatesView}
       />
 
       {activeView === "builder" && activeQuote ? (
@@ -621,8 +784,13 @@ export function BuilderPage() {
                     }`}
                   >
                     <div className="flex items-baseline justify-between gap-2">
-                      <span className="font-display text-[13.5px] font-semibold text-ink-text">
-                        {quote.name}
+                      <span>
+                        {quote.quoteNo && (
+                          <span className="mb-0.5 block font-mono text-[10.5px] text-teal-dk">{quote.quoteNo}</span>
+                        )}
+                        <span className="block font-display text-[13.5px] font-semibold text-ink-text">
+                          {quote.name}
+                        </span>
                       </span>
                       <span className="font-mono text-[12.5px] text-ink-text">{money(t.total)}</span>
                     </div>
@@ -725,6 +893,7 @@ export function BuilderPage() {
             </div>
 
             <div className="mb-[18px] font-mono text-[12.5px] text-muted">
+              {activeQuote.quoteNo && <span className="text-teal-dk">{activeQuote.quoteNo}  ·  </span>}
               {activeQuote.items.length} part{activeQuote.items.length === 1 ? "" : "s"}
               {activeQuote.items.length > 0 &&
                 `  ·  ${activeQuote.items
@@ -906,6 +1075,15 @@ export function BuilderPage() {
               </button>
               <button
                 type="button"
+                onClick={saveActiveQuoteAsTemplate}
+                disabled={!activeQuote.items.length || saving}
+                className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-line bg-card px-[18px] py-[11px] font-display text-[13.5px] font-semibold text-ink-2 disabled:opacity-45"
+                title="Try a descriptive name like Sony A7V Macro Build"
+              >
+                Save as template
+              </button>
+              <button
+                type="button"
                 onClick={downloadPdf}
                 disabled={!activeQuote.persisted}
                 className="flex items-center gap-2 rounded-[var(--radius-sm)] border border-line bg-card px-[18px] py-[11px] font-display text-[13.5px] font-semibold text-ink-2 disabled:opacity-45"
@@ -937,7 +1115,7 @@ export function BuilderPage() {
             </p>
           </main>
         </div>
-      ) : (
+      ) : activeView === "quotes" ? (
         <div className="mx-auto max-w-[1000px] px-[22px] pb-20 pt-6">
           <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
             <h2 className="m-0 font-display text-[22px] font-semibold text-ink">
@@ -1010,7 +1188,10 @@ export function BuilderPage() {
                   className="grid w-full grid-cols-[1.3fr_1.5fr_0.8fr_0.8fr_0.7fr_1.2fr] items-center gap-2.5 border-b border-[#F0F3F5] px-4 py-[13px] text-left last:border-b-0 hover:bg-teal-bg"
                 >
                   <span className="font-medium text-ink-text">{row.customerName || "—"}</span>
-                  <span className="text-[13px] text-muted">{row.name}</span>
+                  <span className="text-[13px] text-muted">
+                    {row.quoteNo && <span className="mr-2 font-mono text-teal-dk">{row.quoteNo}</span>}
+                    {row.name}
+                  </span>
                   <span className="num text-right text-[13px]">{money(row.payable ?? row.total)}</span>
                   <span className="text-right">
                     <StatusPill status={row.status} />
@@ -1023,6 +1204,14 @@ export function BuilderPage() {
                       className="rounded-md border border-line bg-card px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-ink-2 hover:border-teal hover:text-teal-dk"
                     >
                       Open
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => duplicateDashboardQuote(row)}
+                      disabled={quoteActionId === row.quoteId}
+                      className="rounded-md border border-line bg-card px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-ink-2 hover:border-teal hover:text-teal-dk disabled:opacity-45"
+                    >
+                      Duplicate
                     </button>
                     {row.status === "ordered" ? (
                       <button
@@ -1057,6 +1246,87 @@ export function BuilderPage() {
             ) : (
               <div className="px-4 py-10 text-center text-muted">
                 No quotes here yet. Build one in the Builder, then Save it — it&apos;ll appear here.
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="mx-auto max-w-[1000px] px-[22px] pb-20 pt-6">
+          <div className="mb-4 flex flex-wrap items-end justify-between gap-4">
+            <div>
+              <h2 className="m-0 font-display text-[22px] font-semibold text-ink">Templates</h2>
+              <p className="mt-1 text-[13px] text-muted">
+                Reusable named systems. Use one to create a fresh draft quote with current live prices.
+              </p>
+            </div>
+            <input
+              value={templateSearch}
+              onChange={(event) => setTemplateSearch(event.target.value)}
+              placeholder="Filter templates..."
+              className="min-w-[220px] rounded-full border border-line px-3 py-2 text-[13px] outline-none focus:border-teal"
+            />
+          </div>
+
+          {banner && (
+            <div
+              className={`mb-4 flex gap-2.5 rounded-[var(--radius-sm)] border px-3.5 py-[11px] text-[13px] ${
+                banner.kind === "ok"
+                  ? "border-[#BFE0CC] bg-[#ECF6F0] text-[#1E5E3D]"
+                  : "border-[#ECC4C9] bg-[#FBEDEE] text-[#8C2733]"
+              }`}
+            >
+              <span className="font-mono font-semibold">{banner.kind === "ok" ? "✓" : "!"}</span>
+              <span>{banner.message}</span>
+            </div>
+          )}
+
+          <div className="overflow-hidden rounded-[var(--radius)] border border-line bg-card shadow-card">
+            <div className="grid grid-cols-[2fr_0.7fr_0.7fr_1fr] gap-2.5 border-b border-[#F0F3F5] bg-[#F8FAFB] px-4 py-[13px] text-[10.5px] font-semibold uppercase tracking-[0.5px] text-muted">
+              <span>Template name</span>
+              <span className="text-right">Items</span>
+              <span className="text-right">Updated</span>
+              <span className="text-right">Actions</span>
+            </div>
+
+            {filteredTemplateRows.length ? (
+              filteredTemplateRows.map((row) => (
+                <div
+                  key={row.quoteId}
+                  className="grid w-full grid-cols-[2fr_0.7fr_0.7fr_1fr] items-center gap-2.5 border-b border-[#F0F3F5] px-4 py-[13px] text-left last:border-b-0 hover:bg-teal-bg"
+                >
+                  <span>
+                    <span className="block font-display text-[15px] font-semibold text-ink-text">{row.name}</span>
+                    {row.tradeInCount > 0 && (
+                      <span className="mt-0.5 block text-xs text-muted">
+                        Includes {row.tradeInCount} trade-in/allowance row{row.tradeInCount === 1 ? "" : "s"}
+                      </span>
+                    )}
+                  </span>
+                  <span className="text-right text-[13px] text-muted">{row.itemCount}</span>
+                  <span className="text-right text-xs text-muted">{formatWhen(row.updatedAt)}</span>
+                  <span className="flex flex-wrap justify-end gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => createDraftFromTemplate(row)}
+                      disabled={templateActionId === row.quoteId}
+                      className="rounded-md border border-line bg-card px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-ink-2 hover:border-teal hover:text-teal-dk disabled:opacity-45"
+                    >
+                      Use template
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => renameTemplate(row)}
+                      disabled={templateActionId === row.quoteId}
+                      className="rounded-md border border-line bg-card px-2.5 py-1.5 font-display text-[11.5px] font-semibold text-ink-2 hover:border-teal hover:text-teal-dk disabled:opacity-45"
+                    >
+                      Rename
+                    </button>
+                  </span>
+                </div>
+              ))
+            ) : (
+              <div className="px-4 py-10 text-center text-muted">
+                No templates yet. Build a system, then choose Save as template.
               </div>
             )}
           </div>

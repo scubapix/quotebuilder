@@ -33,6 +33,7 @@ model Quote {
   name        String
   // Validated in app code: draft | sent | accepted | ordered.
   status      String     @default("draft")
+  isTemplate  Boolean    @default(false)
   customerId  String?
   customer    Customer?  @relation(fields: [customerId], references: [id], onDelete: SetNull)
   quoteNo     String?
@@ -43,6 +44,7 @@ model Quote {
   tradeins    TradeIn[]
 
   @@index([customerId])
+  @@index([isTemplate])
   @@index([status])
   @@index([updatedAt])
 }

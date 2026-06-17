@@ -191,6 +191,31 @@ export async function searchBigCommerceProducts(query: string): Promise<CatalogI
   return (json.data ?? []).flatMap((product) => productToCatalogItems(product)).slice(0, 8);
 }
 
+export async function fetchBigCommerceCatalogItem(input: {
+  productId: number;
+  variantId: number | null;
+  sku: string;
+}): Promise<CatalogItem> {
+  const json = await requestBigCommerce<{ data?: BigCommerceProduct }>(
+    `/v3/catalog/products/${input.productId}?include=variants`,
+  );
+  const product = json.data;
+  if (!product) throw new BigCommerceError(`BigCommerce product ${input.productId} was not found.`);
+
+  const items = productToCatalogItems(product);
+  const exactVariant =
+    input.variantId !== null ? items.find((item) => item.variantId === input.variantId) : null;
+  const exactSku = items.find((item) => item.sku === input.sku);
+  const productOnly = input.variantId === null ? items.find((item) => item.productId === input.productId) : null;
+  const item = exactVariant ?? exactSku ?? productOnly;
+
+  if (!item) {
+    throw new BigCommerceError(`BigCommerce product ${input.productId} no longer has the quoted variant or SKU.`);
+  }
+
+  return item;
+}
+
 function fetchProductPage(page: number) {
   const params = new URLSearchParams({
     include: "variants",

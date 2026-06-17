@@ -26,11 +26,12 @@ const MODE_DOT: Record<AppMode, string> = {
 };
 
 interface AppHeaderProps {
-  activeView: "builder" | "quotes";
+  activeView: "builder" | "quotes" | "templates";
   mode?: AppMode;
   openQuoteCount?: number;
   onNavBuilder?: () => void;
   onNavQuotes?: () => void;
+  onNavTemplates?: () => void;
   onSettings?: () => void;
 }
 
@@ -40,6 +41,7 @@ export function AppHeader({
   openQuoteCount = 0,
   onNavBuilder,
   onNavQuotes,
+  onNavTemplates,
   onSettings,
 }: AppHeaderProps) {
   return (
@@ -85,6 +87,17 @@ export function AppHeader({
               {openQuoteCount}
             </span>
           )}
+        </button>
+        <button
+          type="button"
+          onClick={onNavTemplates}
+          className={`rounded-lg px-[13px] py-[7px] font-display text-[13px] font-medium ${
+            activeView === "templates"
+              ? "bg-white/13 text-white"
+              : "text-[#9DB0C9] hover:bg-white/[0.07] hover:text-white"
+          }`}
+        >
+          Templates
         </button>
       </nav>
 

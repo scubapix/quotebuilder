@@ -52,6 +52,7 @@ export interface Quote {
   id: string;
   name: string;
   status: QuoteStatus;
+  isTemplate?: boolean;
   items: LineItem[];
   tradeins: TradeIn[];
   checkout: CheckoutInfo | null;
@@ -83,6 +84,7 @@ export function totals(quote: Pick<Quote, "items" | "tradeins">): QuoteTotals {
 
 export interface DashboardQuoteRow {
   quoteId: string;
+  quoteNo?: string;
   customerId?: string | number;
   customerName: string;
   customerEmail: string;
@@ -91,6 +93,20 @@ export interface DashboardQuoteRow {
   payable: number;
   status: QuoteStatus;
   updatedAt: number;
+}
+
+export interface TemplateQuoteRow {
+  quoteId: string;
+  name: string;
+  itemCount: number;
+  tradeInCount: number;
+  updatedAt: number;
+}
+
+export interface TemplatePriceNote {
+  sku: string;
+  name: string;
+  message: string;
 }
 
 export interface HealthResponse {
